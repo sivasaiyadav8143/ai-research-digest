@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI Research Digest</title>
+  <style>
+    /* ── Reset & Base ───────────────────────────────────────────────────────
+       Email clients are notoriously inconsistent with CSS.
+       We use inline-friendly styles + a reset to ensure Gmail, Outlook,
+       Apple Mail all render consistently.
+    ── */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background-color: #0f1117;
+      font-family: Georgia, 'Times New Roman', serif;
+      color: #e8e6e1;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Outer wrapper — centres email on wide screens ─────────────────── */
+    .email-wrapper {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 32px 16px;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+    .header {
+      text-align: center;
+      padding: 48px 32px 40px;
+      background: linear-gradient(135deg, #1a1d2e 0%, #12151f 100%);
+      border-radius: 16px 16px 0 0;
+      border-bottom: 1px solid #2a2d3e;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Decorative top accent bar */
+    .header::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, #6c63ff, #4ecdc4, #ff6b6b);
+    }
+
+    .header-eyebrow {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 11px;
+      letter-spacing: 4px;
+      color: #6c63ff;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+
+    .header-title {
+      font-family: Georgia, serif;
+      font-size: 36px;
+      font-weight: 700;
+      color: #ffffff;
+      letter-spacing: -0.5px;
+      line-height: 1.1;
+      margin-bottom: 8px;
+    }
+
+    .header-title span {
+      background: linear-gradient(135deg, #6c63ff, #4ecdc4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .header-subtitle {
+      font-size: 14px;
+      color: #8b8fa8;
+      font-style: italic;
+      margin-bottom: 24px;
+    }
+
+    .header-meta {
+      display: inline-flex;
+      gap: 24px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid #2a2d3e;
+      border-radius: 100px;
+      padding: 10px 24px;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      color: #6b7280;
+      letter-spacing: 1px;
+    }
+
+    .header-meta span { color: #9ca3af; }
+
+    /* ── Body container ─────────────────────────────────────────────────── */
+    .body-container {
+      background-color: #13161f;
+      padding: 40px 40px 32px;
+      border-left: 1px solid #1e2130;
+      border-right: 1px solid #1e2130;
+    }
+
+    /* ── Intro blurb ────────────────────────────────────────────────────── */
+    .intro {
+      font-size: 15px;
+      line-height: 1.8;
+      color: #9ca3af;
+      padding-bottom: 32px;
+      border-bottom: 1px solid #1e2130;
+      margin-bottom: 40px;
+    }
+
+    .intro strong { color: #e8e6e1; }
+
+    /* ── Section label ──────────────────────────────────────────────────── */
+    .section-label {
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: 4px;
+      color: #6c63ff;
+      text-transform: uppercase;
+      margin-bottom: 24px;
+    }
+
+    /* ── Paper card ─────────────────────────────────────────────────────── */
+    .paper-card {
+      background: #1a1d2e;
+      border: 1px solid #252840;
+      border-radius: 12px;
+      padding: 28px;
+      margin-bottom: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Left accent bar — colour varies by source */
+    .paper-card::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+    }
+
+    .paper-card.source-arxiv::before    { background: #6c63ff; }
+    .paper-card.source-huggingface::before { background: #4ecdc4; }
+
+    /* Paper number badge */
+    .paper-number {
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: 2px;
+      color: #4b5563;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    /* Paper headline — the most prominent text on each card */
+    .paper-headline {
+      font-family: Georgia, serif;
+      font-size: 20px;
+      font-weight: 700;
+      color: #f3f4f6;
+      line-height: 1.3;
+      margin-bottom: 20px;
+    }
+
+    /* Summary blocks ── */
+    .summary-block {
+      margin-bottom: 16px;
+    }
+
+    .summary-block-label {
+      font-family: 'Courier New', monospace;
+      font-size: 9px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      display: block;
+    }
+
+    .label-what   { color: #818cf8; }
+    .label-why    { color: #34d399; }
+    .label-analogy{ color: #fb923c; }
+
+    .summary-block p {
+      font-size: 14px;
+      line-height: 1.75;
+      color: #c9cad4;
+    }
+
+    /* Analogy block — slightly styled differently */
+    .analogy-block {
+      background: rgba(251, 146, 60, 0.06);
+      border: 1px solid rgba(251, 146, 60, 0.15);
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-top: 16px;
+    }
+
+    .analogy-block p {
+      font-style: italic;
+      color: #d1a56a;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    /* Paper footer — source badge + read more link */
+    .paper-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid #252840;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .source-badge {
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border-radius: 100px;
+      display: inline-block;
+    }
+
+    .badge-arxiv {
+      background: rgba(108, 99, 255, 0.12);
+      color: #818cf8;
+      border: 1px solid rgba(108, 99, 255, 0.25);
+    }
+
+    .badge-huggingface {
+      background: rgba(78, 205, 196, 0.12);
+      color: #4ecdc4;
+      border: 1px solid rgba(78, 205, 196, 0.25);
+    }
+
+    .read-more {
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      color: #6c63ff;
+      text-decoration: none;
+      letter-spacing: 1px;
+      border-bottom: 1px solid rgba(108, 99, 255, 0.3);
+      padding-bottom: 1px;
+    }
+
+    /* ── Divider ────────────────────────────────────────────────────────── */
+    .divider {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, #2a2d3e, transparent);
+      margin: 8px 0 28px;
+    }
+
+    /* ── Footer ─────────────────────────────────────────────────────────── */
+    .footer {
+      background: #0f1117;
+      border: 1px solid #1e2130;
+      border-top: none;
+      border-radius: 0 0 16px 16px;
+      padding: 32px 40px;
+      text-align: center;
+    }
+
+    .footer-logo {
+      font-family: Georgia, serif;
+      font-size: 16px;
+      color: #374151;
+      margin-bottom: 12px;
+      letter-spacing: 1px;
+    }
+
+    .footer-logo span {
+      color: #6c63ff;
+    }
+
+    .footer-text {
+      font-size: 12px;
+      color: #374151;
+      line-height: 1.7;
+      margin-bottom: 16px;
+    }
+
+    .footer-links {
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: 2px;
+      color: #4b5563;
+    }
+
+    .footer-links a {
+      color: #6b7280;
+      text-decoration: none;
+    }
+
+  </style>
+</head>
+<body>
+<div class="email-wrapper">
+
+  <!-- ── HEADER ─────────────────────────────────────────────────────────── -->
+  <div class="header">
+    <div class="header-eyebrow">Daily Briefing</div>
+    <div class="header-title">AI Research <span>Digest</span></div>
+    <div class="header-subtitle">The latest breakthroughs, explained in plain English</div>
+    <div class="header-meta">
+      <span>{{ date }}</span>
+      &nbsp;·&nbsp;
+      <span>{{ paper_count }} papers</span>
+      &nbsp;·&nbsp;
+      <span>{{ read_time }} min read</span>
+    </div>
+  </div>
+
+  <!-- ── BODY ───────────────────────────────────────────────────────────── -->
+  <div class="body-container">
+
+    <p class="intro">
+      Good {{ time_of_day }}, <strong>{{ recipient_name }}</strong>. Here are today's
+      most significant AI research papers — curated from arXiv and HuggingFace,
+      and summarised so you can stay ahead without reading the originals.
+    </p>
+
+    <div class="section-label">Today's Papers</div>
+
+    <!-- ── PAPER CARDS (looped by Jinja2) ─────────────────────────────── -->
+    {% for item in papers %}
+    <div class="paper-card source-{{ item.paper.source }}">
+
+      <div class="paper-number">Paper {{ loop.index }} of {{ papers | length }}</div>
+
+      <div class="paper-headline">{{ item.headline }}</div>
+
+      <!-- What it does -->
+      <div class="summary-block">
+        <span class="summary-block-label label-what">What it does</span>
+        <p>{{ item.what_it_does }}</p>
+      </div>
+
+      <!-- Why it matters -->
+      <div class="summary-block">
+        <span class="summary-block-label label-why">Why it matters</span>
+        <p>{{ item.why_it_matters }}</p>
+      </div>
+
+      <!-- Analogy -->
+      <div class="analogy-block">
+        <span class="summary-block-label label-analogy">Analogy</span>
+        <p>{{ item.analogy }}</p>
+      </div>
+
+      <!-- Card footer -->
+      <div class="paper-footer">
+        <span class="source-badge badge-{{ item.paper.source }}">
+          {{ item.paper.source }}
+        </span>
+        <a href="{{ item.paper.url }}" class="read-more">
+          Read Full Paper →
+        </a>
+      </div>
+
+    </div>
+
+    {% if not loop.last %}
+    <div class="divider"></div>
+    {% endif %}
+
+    {% endfor %}
+
+  </div><!-- /body-container -->
+
+  <!-- ── FOOTER ─────────────────────────────────────────────────────────── -->
+  <div class="footer">
+    <div class="footer-logo">AI Research <span>Digest</span></div>
+    <p class="footer-text">
+      Powered by Mistral 7B &amp; open-source tools.<br/>
+      Papers sourced from arXiv and HuggingFace Papers.
+    </p>
+    <div class="footer-links">
+      {{ date }} &nbsp;·&nbsp; Built with ♥ using open-source AI
+    </div>
+  </div>
+
+</div><!-- /email-wrapper -->
+</body>
+</html>
