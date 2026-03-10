@@ -112,21 +112,16 @@ class DigestScheduler:
 
     # ── Job Management ────────────────────────────────────────────────────────
 
-    def add_job(self, email: str, hour: int = 8, minute: int = 0) -> dict:
+    def add_job(self, email: str, hour: int = 8, minute: int = 0, paper_count: int = 5, sources: list = None) -> dict:
         """
         Registers a new daily digest job for the given email address.
 
-        The job will run every day at the specified UTC hour:minute.
-        Default is 08:00 UTC which is a reasonable morning time for
-        most European/US timezones.
-
-        If the email already has a job, it is replaced with the new schedule
-        (idempotent — safe to call multiple times for the same email).
-
         Args:
-            email  : Recipient email address. Used as the unique job identifier.
-            hour   : UTC hour to send the digest (0-23). Default: 8
-            minute : UTC minute to send the digest (0-59). Default: 0
+            email        : Recipient email address. Used as the unique job identifier.
+            hour         : UTC hour to send the digest (0-23). Default: 8
+            minute       : UTC minute to send the digest (0-59). Default: 0
+            paper_count  : How many papers to include in each digest (3-10). Default: 5
+            sources      : Which sources to fetch from. Default: both arXiv and HuggingFace
 
         Returns:
             dict: {
@@ -136,8 +131,10 @@ class DigestScheduler:
                 "job_id"     : str  — unique job identifier
             }
         """
-        # Create a safe job ID from the email (APScheduler needs alphanumeric IDs)
-        # Replace @ and . with underscores: user@example.com → user_example_com
+        if sources is None:
+            sources = ["arxiv", "huggingface"]
+
+        # Create a safe job ID from the email
         job_id = f"digest_{email.replace('@', '_').replace('.', '_')}"
 
         # If already subscribed, remove the old job first
@@ -146,34 +143,28 @@ class DigestScheduler:
             logger.info(f"[Scheduler] Replaced existing job for {email}")
 
         try:
-            # Schedule the job using CronTrigger
-            # CronTrigger fires at a specific time each day (like a Unix cron)
-            # interval=1 day at hour:minute UTC
             job = self.scheduler.add_job(
-                func     = self._run_pipeline_for_email,  # Function to call
+                func     = self._run_pipeline_for_email,
                 trigger  = CronTrigger(
                     hour    = hour,
                     minute  = minute,
                     timezone= "UTC",
                 ),
-                args     = [email],       # Arguments passed to the function
-                id       = job_id,        # Unique identifier for this job
+                args     = [email, paper_count, sources],
+                id       = job_id,
                 name     = f"Daily digest for {email}",
-                replace_existing = True,  # Replace if ID already exists
-                misfire_grace_time = 3600,  # Allow up to 1hr late if server was sleeping
+                replace_existing   = True,
+                misfire_grace_time = 3600,
             )
 
-            # Track this job
             self.active_jobs[email] = job_id
 
-            # Get next run time for confirmation message
             next_run = job.next_run_time.strftime("%Y-%m-%d %H:%M UTC") if job.next_run_time else "Unknown"
-
-            logger.info(f"[Scheduler] ✅ Job scheduled for {email} — next run: {next_run}")
+            logger.info(f"[Scheduler] ✅ Job scheduled for {email} — next run: {next_run} — {paper_count} papers — sources: {sources}")
 
             return {
                 "success" : True,
-                "message" : f"Daily digest scheduled for {email} at {hour:02d}:{minute:02d} UTC",
+                "message" : f"Daily digest scheduled for {email} at {hour:02d}:{minute:02d} UTC · {paper_count} papers · {', '.join(sources)}",
                 "next_run": next_run,
                 "job_id"  : job_id,
             }
@@ -252,21 +243,24 @@ class DigestScheduler:
 
     # ── Internal Helpers ──────────────────────────────────────────────────────
 
-    def _run_pipeline_for_email(self, email: str):
+    def _run_pipeline_for_email(self, email: str, paper_count: int = 5, sources: list = None):
         """
         Called by APScheduler when a job fires.
-        Wraps the pipeline function with error handling so a single failure
-        doesn't crash the entire scheduler or affect other subscribers.
+        Forwards paper_count and sources to the pipeline so each subscriber's
+        preferences are respected on every scheduled run.
 
         Args:
-            email: The recipient email for this scheduled run.
+            email        : The recipient email for this scheduled run.
+            paper_count  : Number of papers to include.
+            sources      : List of sources to fetch from.
         """
-        logger.info(f"[Scheduler] 🚀 Running scheduled digest for {email}")
+        if sources is None:
+            sources = ["arxiv", "huggingface"]
+        logger.info(f"[Scheduler] 🚀 Running scheduled digest for {email} ({paper_count} papers, sources: {sources})")
         try:
-            self.pipeline_fn(email)
+            self.pipeline_fn(email, paper_count=paper_count, sources=sources)
             logger.info(f"[Scheduler] ✅ Completed digest for {email}")
         except Exception as e:
-            # Log the error but don't re-raise — scheduler must keep running
             logger.error(f"[Scheduler] ❌ Pipeline failed for {email}: {e}")
 
     def _remove_job_by_id(self, job_id: str) -> bool:
