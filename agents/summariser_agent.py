@@ -93,7 +93,7 @@ class SummariserAgent:
     MODEL_ID = "llama-3.1-8b-instant"
 
     # HF Inference API base URL
-    HF_API_URL = "https://router.huggingface.co/hf-inference/v1/chat/completions"
+    GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
     # How long to wait between API calls (seconds)
     # HF free tier is rate-limited — a small delay avoids 429 errors
