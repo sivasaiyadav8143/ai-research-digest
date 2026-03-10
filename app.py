@@ -80,88 +80,90 @@ CONFIG = {
 
 # ── Phase orchestration ───────────────────────────────────────────────────────
 
-def run_pipeline(recipient_email: str) -> dict:
+def run_pipeline(recipient_email: str, progress_callback=None):
     """
     Runs the full 4-phase pipeline for a given recipient email.
 
-    This function is called in two scenarios:
-        1. One-time run  — triggered immediately when user clicks "Send Now"
-        2. Scheduled run — triggered daily by APScheduler at 08:00 UTC
+    progress_callback is an optional function(message: str) that gets called
+    after each phase completes — used by handle_submit() to stream live
+    status updates to the Gradio UI so the user sees progress in real time.
 
     Args:
-        recipient_email: The email address to deliver the newsletter to.
+        recipient_email   : The email address to deliver the newsletter to.
+        progress_callback : Optional callable(str) for streaming UI updates.
 
     Returns:
-        dict: Pipeline result containing:
-              - "success"      (bool) : Whether the email was sent
-              - "message"      (str)  : Human-readable status message
-              - "papers_found" (int)  : Total papers fetched before filtering
-              - "papers_sent"  (int)  : Papers included in the newsletter
-              - "html_preview" (str)  : Rendered HTML (for Gradio preview tab)
-              - "email_id"     (str)  : Resend email ID if successful
+        dict: Pipeline result containing success, message, papers_found,
+              papers_sent, html_preview, email_id.
     """
-    print(f"\n{'='*65}")
-    print(f"  🚀 PIPELINE STARTED — recipient: {recipient_email}")
-    print(f"{'='*65}\n")
 
-    # ── Phase 1: Fetch papers from both sources ───────────────────────────────
-    print("📡 PHASE 1: Fetching papers...")
+    def notify(msg: str):
+        """Sends a progress update to the UI if callback is registered."""
+        print(msg)
+        if progress_callback:
+            progress_callback(msg)
+
+    notify(f"🚀 Pipeline started for {recipient_email}\n")
+
+    # ── Phase 1: Fetch ────────────────────────────────────────────────────────
+    notify("📡 Phase 1 of 4 — Fetching papers...\n   Querying arXiv API...")
 
     arxiv_agent = ArxivFetcherAgent(
         max_results = CONFIG["arxiv_max_results"],
         hours_back  = CONFIG["arxiv_hours_back"],
     )
-    hf_agent = HuggingFaceFetcherAgent(
-        max_results = CONFIG["hf_max_results"],
-    )
-
     arxiv_papers = arxiv_agent.fetch()
+    notify(f"   ✅ arXiv: {len(arxiv_papers)} papers fetched\n   Scraping HuggingFace Papers...")
+
+    hf_agent     = HuggingFaceFetcherAgent(max_results=CONFIG["hf_max_results"])
     hf_papers    = hf_agent.fetch()
     total_fetched = len(arxiv_papers) + len(hf_papers)
 
-    print(f"   arXiv: {len(arxiv_papers)} papers | HuggingFace: {len(hf_papers)} papers")
-    print(f"   Total fetched: {total_fetched}\n")
+    notify(f"   ✅ HuggingFace: {len(hf_papers)} papers fetched\n   Total: {total_fetched} papers collected")
 
-    # Guard: if no papers were fetched (e.g. network issue), abort gracefully
     if total_fetched == 0:
         return {
-            "success"      : False,
-            "message"      : "Could not fetch any papers. Please check your internet connection and try again.",
-            "papers_found" : 0,
-            "papers_sent"  : 0,
-            "html_preview" : "",
-            "email_id"     : None,
+            "success": False,
+            "message": "Could not fetch any papers. Please check your internet connection and try again.",
+            "papers_found": 0, "papers_sent": 0, "html_preview": "", "email_id": None,
         }
 
-    # ── Phase 2: Filter & rank to top N ──────────────────────────────────────
-    print("🔍 PHASE 2: Filtering & ranking papers...")
+    # ── Phase 2: Filter & Rank ────────────────────────────────────────────────
+    notify(f"\n🔍 Phase 2 of 4 — Filtering & ranking {total_fetched} papers...")
 
     filter_agent = FilterRankAgent(top_n=CONFIG["top_n_papers"])
     top_papers   = filter_agent.run(arxiv_papers, hf_papers)
 
-    print(f"   Selected top {len(top_papers)} papers for newsletter\n")
+    notify(f"   ✅ Deduplicated, scored and ranked all papers\n   📰 Top {len(top_papers)} selected for newsletter:")
+    for i, p in enumerate(top_papers, 1):
+        short_title = p.title[:55] + "..." if len(p.title) > 55 else p.title
+        notify(f"      [{i}] {short_title}")
 
-    # Guard: if filter removed everything (very unlikely but defensive)
     if not top_papers:
         return {
-            "success"      : False,
-            "message"      : "No papers passed the quality filter. Please try again later.",
-            "papers_found" : total_fetched,
-            "papers_sent"  : 0,
-            "html_preview" : "",
-            "email_id"     : None,
+            "success": False,
+            "message": "No papers passed the quality filter. Please try again later.",
+            "papers_found": total_fetched, "papers_sent": 0, "html_preview": "", "email_id": None,
         }
 
-    # ── Phase 3: Summarise with Mistral 7B ───────────────────────────────────
-    print("🤖 PHASE 3: Summarising papers with Mistral 7B...")
+    # ── Phase 3: Summarise ────────────────────────────────────────────────────
+    notify(f"\n🤖 Phase 3 of 4 — Summarising with Mistral 7B...")
+    notify(f"   This is the slowest step (~15 sec per paper × {len(top_papers)} papers)")
 
-    summariser       = SummariserAgent()
-    summarised_papers = summariser.run(top_papers)
+    summariser        = SummariserAgent()
+    summarised_papers = []
 
-    print(f"   Generated summaries for {len(summarised_papers)} papers\n")
+    for i, paper in enumerate(top_papers, 1):
+        short_title = paper.title[:50] + "..." if len(paper.title) > 50 else paper.title
+        notify(f"   ⏳ Summarising paper {i}/{len(top_papers)}: {short_title}")
+        result_single = summariser.run([paper])   # summarise one at a time for live updates
+        summarised_papers.extend(result_single)
+        notify(f"   ✅ Paper {i}/{len(top_papers)} done")
 
-    # ── Phase 4: Render & send newsletter ────────────────────────────────────
-    print("📧 PHASE 4: Sending newsletter...")
+    notify(f"   ✅ All {len(summarised_papers)} summaries generated")
+
+    # ── Phase 4: Send Newsletter ──────────────────────────────────────────────
+    notify(f"\n📧 Phase 4 of 4 — Rendering & sending newsletter to {recipient_email}...")
 
     newsletter_agent = NewsletterAgent(
         sender_email = CONFIG["sender_email"],
@@ -169,85 +171,162 @@ def run_pipeline(recipient_email: str) -> dict:
     )
     result = newsletter_agent.run(summarised_papers, recipient_email)
 
-    # Enrich result with pipeline stats
     result["papers_found"] = total_fetched
     result["papers_sent"]  = len(summarised_papers)
 
-    print(f"\n{'='*65}")
-    print(f"  {'✅ PIPELINE COMPLETE' if result['success'] else '❌ PIPELINE FAILED'}")
-    print(f"  {result['message']}")
-    print(f"{'='*65}\n")
+    if result["success"]:
+        notify(f"   ✅ Email sent! ID: {result.get('email_id', 'N/A')}")
+    else:
+        notify(f"   ❌ Email failed: {result['message']}")
 
     return result
 
 
-# ── Shared scheduler instance ─────────────────────────────────────────────────
-# Created once at module load time and shared across all Gradio requests.
-# Passing run_pipeline as the job function — scheduler calls this for each email.
-scheduler = DigestScheduler(pipeline_fn=run_pipeline)
-scheduler.start()
-
-# Register clean shutdown — when the app exits, gracefully stop the scheduler
-atexit.register(scheduler.shutdown)
-
-
-# ── Gradio handler functions ──────────────────────────────────────────────────
-# These are called directly by Gradio button clicks.
-# They validate input, call the pipeline or scheduler, and return UI feedback.
-
-def handle_submit(email: str, mode: str) -> tuple[str, str]:
+def handle_submit(email: str, mode: str):
     """
     Called when the user clicks the Submit button in the Gradio UI.
 
-    Handles both run modes:
-        - "Send Now"       → runs the full pipeline immediately
-        - "Daily Schedule" → registers a recurring APScheduler job
+    Uses a generator (yield) to stream live status updates to the UI
+    after each pipeline phase — so the user sees real-time progress
+    instead of a blank screen for 60-90 seconds.
+
+    Each yield pushes an updated status string to the Gradio Textbox
+    immediately, without waiting for the full pipeline to complete.
 
     Args:
-        email : Email address entered by the user in the Gradio Textbox.
-        mode  : Either "Send Now" or "Daily Schedule" from the Radio widget.
+        email : Email address entered by the user.
+        mode  : "Send Now" or "Daily Schedule" from the Radio widget.
 
-    Returns:
-        tuple[str, str]:
-            [0] status_message — shown in the status textbox (success/error)
-            [1] html_preview   — shown in the HTML preview tab (empty if scheduled)
+    Yields:
+        tuple[str, str]: (status_message, html_preview)
     """
     # ── Input validation ──────────────────────────────────────────────────────
     email = email.strip() if email else ""
 
     if not email:
-        return "⚠️ Please enter your email address.", ""
+        yield "⚠️ Please enter your email address.", ""
+        return
 
     if not _is_valid_email(email):
-        return "⚠️ Please enter a valid email address (e.g. you@example.com).", ""
+        yield "⚠️ Please enter a valid email address (e.g. you@example.com).", ""
+        return
 
     # ── Mode: Send Now ────────────────────────────────────────────────────────
     if mode == "Send Now":
-        status = f"⏳ Running pipeline for {email}...\nThis takes ~60-90 seconds. Please wait."
-        yield status, ""   # Yield intermediate status so user sees progress
+
+        # status_lines accumulates all progress messages into one string.
+        # Each yield replaces the full textbox content — so we keep appending
+        # new lines to show a running log of what has happened so far.
+        status_lines = []
+
+        def update_status(msg: str):
+            """Appends a new line to the status log."""
+            status_lines.append(msg)
+
+        # Show initial message immediately so user knows it started
+        status_lines.append(f"⏳ Starting pipeline for {email}...")
+        status_lines.append("━" * 45)
+        yield "\n".join(status_lines), ""
 
         try:
-            result = run_pipeline(email)
+            # Run pipeline — progress_callback fires after each step
+            # Each callback call appends to status_lines but we can't yield
+            # from inside a callback, so we run phases manually with yields
 
+            # ── Phase 1 ───────────────────────────────────────────────────────
+            status_lines.append("\n📡 Phase 1 of 4 — Fetching papers...")
+            status_lines.append("   Querying arXiv API...")
+            yield "\n".join(status_lines), ""
+
+            arxiv_agent  = ArxivFetcherAgent(
+                max_results=CONFIG["arxiv_max_results"],
+                hours_back =CONFIG["arxiv_hours_back"],
+            )
+            arxiv_papers = arxiv_agent.fetch()
+            status_lines.append(f"   ✅ arXiv: {len(arxiv_papers)} papers fetched")
+            status_lines.append("   Scraping HuggingFace Papers...")
+            yield "\n".join(status_lines), ""
+
+            hf_agent     = HuggingFaceFetcherAgent(max_results=CONFIG["hf_max_results"])
+            hf_papers    = hf_agent.fetch()
+            total_fetched = len(arxiv_papers) + len(hf_papers)
+            status_lines.append(f"   ✅ HuggingFace: {len(hf_papers)} papers fetched")
+            status_lines.append(f"   📊 Total collected: {total_fetched} papers")
+            yield "\n".join(status_lines), ""
+
+            if total_fetched == 0:
+                status_lines.append("\n❌ No papers fetched — check internet connection.")
+                yield "\n".join(status_lines), ""
+                return
+
+            # ── Phase 2 ───────────────────────────────────────────────────────
+            status_lines.append(f"\n🔍 Phase 2 of 4 — Filtering & ranking {total_fetched} papers...")
+            yield "\n".join(status_lines), ""
+
+            filter_agent = FilterRankAgent(top_n=CONFIG["top_n_papers"])
+            top_papers   = filter_agent.run(arxiv_papers, hf_papers)
+
+            status_lines.append(f"   ✅ Top {len(top_papers)} papers selected:")
+            for i, p in enumerate(top_papers, 1):
+                short = p.title[:52] + "..." if len(p.title) > 52 else p.title
+                status_lines.append(f"      [{i}] {short}")
+            yield "\n".join(status_lines), ""
+
+            if not top_papers:
+                status_lines.append("\n❌ No papers passed quality filter. Try again later.")
+                yield "\n".join(status_lines), ""
+                return
+
+            # ── Phase 3 ───────────────────────────────────────────────────────
+            status_lines.append(f"\n🤖 Phase 3 of 4 — Summarising with Mistral 7B...")
+            status_lines.append(f"   (~15 sec per paper × {len(top_papers)} papers)")
+            yield "\n".join(status_lines), ""
+
+            summariser        = SummariserAgent()
+            summarised_papers = []
+
+            for i, paper in enumerate(top_papers, 1):
+                short = paper.title[:50] + "..." if len(paper.title) > 50 else paper.title
+                status_lines.append(f"   ⏳ [{i}/{len(top_papers)}] Summarising: {short}")
+                yield "\n".join(status_lines), ""
+
+                single = summariser.run([paper])
+                summarised_papers.extend(single)
+                status_lines.append(f"   ✅ [{i}/{len(top_papers)}] Done")
+                yield "\n".join(status_lines), ""
+
+            # ── Phase 4 ───────────────────────────────────────────────────────
+            status_lines.append(f"\n📧 Phase 4 of 4 — Sending newsletter to {email}...")
+            yield "\n".join(status_lines), ""
+
+            newsletter_agent = NewsletterAgent(
+                sender_email = CONFIG["sender_email"],
+                sender_name  = CONFIG["sender_name"],
+            )
+            result = newsletter_agent.run(summarised_papers, email)
+            result["papers_found"] = total_fetched
+            result["papers_sent"]  = len(summarised_papers)
+
+            # ── Final status ──────────────────────────────────────────────────
+            status_lines.append("━" * 45)
             if result["success"]:
-                status = (
-                    f"✅ Newsletter sent successfully!\n\n"
-                    f"📧 Delivered to  : {email}\n"
-                    f"📄 Papers found  : {result['papers_found']}\n"
-                    f"📰 Papers in email: {result['papers_sent']}\n"
-                    f"🔑 Email ID      : {result.get('email_id', 'N/A')}"
-                )
-                yield status, result.get("html_preview", "")
+                status_lines.append(f"✅ Newsletter delivered successfully!")
+                status_lines.append(f"📧 Sent to      : {email}")
+                status_lines.append(f"📄 Papers found : {total_fetched}")
+                status_lines.append(f"📰 Papers sent  : {result['papers_sent']}")
+                status_lines.append(f"🔑 Email ID     : {result.get('email_id', 'N/A')}")
+                yield "\n".join(status_lines), result.get("html_preview", "")
             else:
-                status = f"❌ Pipeline failed:\n{result['message']}"
-                yield status, ""
+                status_lines.append(f"❌ Failed to send: {result['message']}")
+                yield "\n".join(status_lines), ""
 
         except Exception as e:
-            yield f"❌ Unexpected error: {str(e)}\n\nPlease check your API keys and try again.", ""
+            status_lines.append(f"\n❌ Unexpected error: {str(e)}")
+            status_lines.append("Please check your API keys in Space Secrets and try again.")
+            yield "\n".join(status_lines), ""
 
     # ── Mode: Daily Schedule ──────────────────────────────────────────────────
     elif mode == "Daily Schedule":
-        # Check if already subscribed
         if scheduler.is_subscribed(email):
             yield (
                 f"ℹ️ {email} is already subscribed to daily digests.\n"
@@ -255,7 +334,6 @@ def handle_submit(email: str, mode: str) -> tuple[str, str]:
             ), ""
             return
 
-        # Register the daily job
         result = scheduler.add_job(
             email  = email,
             hour   = CONFIG["schedule_hour"],
