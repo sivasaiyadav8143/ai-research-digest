@@ -112,27 +112,23 @@ class DigestScheduler:
 
     # ── Job Management ────────────────────────────────────────────────────────
 
-    def add_job(self, email: str, hour: int = 8, minute: int = 0, paper_count: int = 5, sources: list = None) -> dict:
+    def add_job(self, email: str, hour: int = 8, minute: int = 0, paper_count: int = 5, sources: list = None, topics: list = None) -> dict:
         """
         Registers a new daily digest job for the given email address.
 
         Args:
-            email        : Recipient email address. Used as the unique job identifier.
-            hour         : UTC hour to send the digest (0-23). Default: 8
-            minute       : UTC minute to send the digest (0-59). Default: 0
-            paper_count  : How many papers to include in each digest (3-10). Default: 5
-            sources      : Which sources to fetch from. Default: both arXiv and HuggingFace
-
-        Returns:
-            dict: {
-                "success"    : bool,
-                "message"    : str,
-                "next_run"   : str  — ISO format datetime of next scheduled run,
-                "job_id"     : str  — unique job identifier
-            }
+            email        : Recipient email address.
+            hour         : UTC hour (0-23). Default: 8
+            minute       : UTC minute (0-59). Default: 0
+            paper_count  : How many papers per digest. Default: 5
+            sources      : Which sources to fetch from. Default: both
+            topics       : Which topics to filter by. Default: all
         """
         if sources is None:
             sources = ["arxiv", "huggingface"]
+        if topics is None:
+            from agents.filter_agent import ALL_TOPICS
+            topics = ALL_TOPICS
 
         # Create a safe job ID from the email
         job_id = f"digest_{email.replace('@', '_').replace('.', '_')}"
@@ -150,7 +146,7 @@ class DigestScheduler:
                     minute  = minute,
                     timezone= "UTC",
                 ),
-                args     = [email, paper_count, sources],
+                args     = [email, paper_count, sources, topics],
                 id       = job_id,
                 name     = f"Daily digest for {email}",
                 replace_existing   = True,
@@ -243,22 +239,16 @@ class DigestScheduler:
 
     # ── Internal Helpers ──────────────────────────────────────────────────────
 
-    def _run_pipeline_for_email(self, email: str, paper_count: int = 5, sources: list = None):
-        """
-        Called by APScheduler when a job fires.
-        Forwards paper_count and sources to the pipeline so each subscriber's
-        preferences are respected on every scheduled run.
-
-        Args:
-            email        : The recipient email for this scheduled run.
-            paper_count  : Number of papers to include.
-            sources      : List of sources to fetch from.
-        """
+    def _run_pipeline_for_email(self, email: str, paper_count: int = 5, sources: list = None, topics: list = None):
+        """Called by APScheduler — forwards all user preferences to the pipeline."""
         if sources is None:
             sources = ["arxiv", "huggingface"]
-        logger.info(f"[Scheduler] 🚀 Running scheduled digest for {email} ({paper_count} papers, sources: {sources})")
+        if topics is None:
+            from agents.filter_agent import ALL_TOPICS
+            topics = ALL_TOPICS
+        logger.info(f"[Scheduler] 🚀 Running digest for {email} | {paper_count} papers | {sources} | {len(topics)} topics")
         try:
-            self.pipeline_fn(email, paper_count=paper_count, sources=sources)
+            self.pipeline_fn(email, paper_count=paper_count, sources=sources, topics=topics)
             logger.info(f"[Scheduler] ✅ Completed digest for {email}")
         except Exception as e:
             logger.error(f"[Scheduler] ❌ Pipeline failed for {email}: {e}")
