@@ -93,7 +93,7 @@ class SummariserAgent:
     MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"
 
     # HF Inference API base URL
-    HF_API_URL = "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta"
+    HF_API_URL = "https://router.huggingface.co/hf-inference/models/HuggingFaceH4/zephyr-7b-beta/v1/chat/completions"
 
     # How long to wait between API calls (seconds)
     # HF free tier is rate-limited — a small delay avoids 429 errors
@@ -247,19 +247,14 @@ class SummariserAgent:
         abstract_truncated = paper.abstract[:1200]
 
         prompt = (
-            "<|system|>\n"
-            "You are a science writer. Summarise AI research papers for non-technical readers.\n"
-            "Always respond using EXACTLY these 4 labels on separate lines. Never skip any label.</s>\n"
-            "<|user|>\n"
+            f"You are a science writer summarising AI research for non-technical readers.\n\n"
             f"Paper: {paper.title}\n\n"
             f"Abstract: {paper.abstract[:800]}\n\n"
-            "Write exactly 4 sections using these labels:\n"
-            "HEADLINE: one sentence summary\n"
-            "WHAT IT DOES: 2 sentences explaining what was built or discovered\n"
-            "WHY IT MATTERS: 1 sentence on real world impact\n"
-            "ANALOGY: one sentence starting with \"Think of it like\"</s>\n"
-            "<|assistant|>\n"
-            "HEADLINE:"
+            "Reply using EXACTLY these 4 labels. Do not skip any. Do not add anything else.\n\n"
+            "HEADLINE: [one sentence capturing the key finding]\n"
+            "WHAT IT DOES: [2 sentences explaining what was built or discovered, no jargon]\n"
+            "WHY IT MATTERS: [1 sentence on real-world impact]\n"
+            "ANALOGY: [one sentence starting with: Think of it like]"
         )
 
         return prompt
@@ -294,44 +289,26 @@ class SummariserAgent:
                     self.HF_API_URL,
                     headers=self.headers,
                     json={
-                        "inputs": prompt,
-                        "parameters": {
-                            # Max tokens to generate (our summary target)
-                            "max_new_tokens": self.MAX_NEW_TOKENS,
-
-                            # Temperature: 0.7 = creative but not hallucinating
-                            # Lower (0.3) = more factual but repetitive
-                            # Higher (1.0) = very creative but unreliable
-                            "temperature": 0.7,
-
-                            # Top-p sampling: consider tokens comprising top 90%
-                            # probability mass — good balance of quality/variety
-                            "top_p": 0.9,
-
-                            # Don't repeat the input prompt in the output
-                            "return_full_text": False,
-
-                            # Stop generating if these tokens appear
-                            # Prevents the model from rambling after the summary
-                            "stop": ["</s>", "[INST]"],
-                        },
-                        # Don't wait for model to load — we handle that in retry
-                        "options": {"wait_for_model": True},
+                        "model": "HuggingFaceH4/zephyr-7b-beta",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": self.MAX_NEW_TOKENS,
+                        "temperature": 0.7,
                     },
-                    timeout=60,  # 60 second timeout per request
+                    timeout=60,
                 )
 
                 # ── Handle API Response Codes ─────────────────────────────────
 
                 if response.status_code == 200:
-                    # Success — extract generated text
                     result = response.json()
-
-                    # HF API returns a list of generated texts
-                    if isinstance(result, list) and len(result) > 0:
-                        generated_text = result[0].get("generated_text", "")
-                        if generated_text.strip():
-                            return generated_text.strip()
+                    # New router returns OpenAI-compatible format
+                    generated_text = (
+                        result.get("choices", [{}])[0]
+                        .get("message", {})
+                        .get("content", "")
+                    )
+                    if generated_text.strip():
+                        return generated_text.strip()
 
                 elif response.status_code == 503:
                     # Model is loading (cold start) — this is normal on free tier
@@ -387,9 +364,6 @@ class SummariserAgent:
         Returns:
             dict with keys: headline, what_it_does, why_it_matters, analogy
         """
-        # Model is primed with "HEADLINE:" so prepend it back for parsing
-        if not raw_text.upper().startswith("HEADLINE"):
-            raw_text = "HEADLINE: " + raw_text
         print(f"[Summariser]   Raw ({len(raw_text)} chars): {raw_text[:120].strip()!r}")
 
         # ── Step 1: Clean the text ────────────────────────────────────────────
