@@ -5,18 +5,26 @@ PHASE 4 — NEWSLETTER AGENT
 Module  : agents/newsletter_agent.py
 Purpose : Takes the summarised papers from Phase 3, renders them into a
           polished HTML email using our Jinja2 template, and delivers the
-          newsletter to the recipient via the Resend email API.
+          newsletter to the recipient via Gmail SMTP.
 
 Two responsibilities in one module:
     1. RENDER  — Jinja2 fills our HTML template with real paper data
-    2. DELIVER — Resend API sends the rendered HTML to the recipient's inbox
+    2. DELIVER — Gmail SMTP sends the rendered HTML to the recipient's inbox
 
-Why Resend?
-    - Modern email API with a clean Python SDK
-    - Generous free tier: 3,000 emails/month, 100/day
-    - Reliable deliverability (doesn't land in spam like raw SMTP)
-    - One function call to send: resend.Emails.send({...})
-    - Docs: https://resend.com/docs
+Why Gmail SMTP?
+    - Completely free — no domain purchase needed
+    - Sends to ANY email address (unlike Resend sandbox)
+    - Uses Python's built-in smtplib — no extra SDK dependency
+    - Just needs a Gmail account + App Password (2 min setup)
+    - Reliable deliverability for portfolio/demo use
+
+Gmail App Password setup (required — regular password won't work):
+    1. Go to myaccount.google.com
+    2. Security → 2-Step Verification → turn ON (required first)
+    3. Security → 2-Step Verification → App passwords (at bottom)
+    4. Select app: Mail → Select device: Other → type "AI Digest" → Generate
+    5. Copy the 16-character password shown (e.g. abcd efgh ijkl mnop)
+    6. Add to HF Space secrets as GMAIL_APP_PASSWORD (no spaces)
 
 Why Jinja2 for templating?
     - Industry standard Python templating engine (used in Flask, Django)
@@ -32,11 +40,12 @@ Author  : AI Research Digest Project
 """
 
 import os
-import re
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from datetime import datetime, timezone
 from pathlib import Path
 
-import resend
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from dotenv import load_dotenv
 
@@ -55,70 +64,78 @@ load_dotenv()
 class NewsletterAgent:
     """
     Renders summarised papers into a beautiful HTML email and delivers
-    it to the recipient using the Resend email API.
+    it to the recipient using Gmail SMTP.
 
     Usage:
-        agent = NewsletterAgent(sender_email="digest@yourdomain.com")
+        agent = NewsletterAgent(sender_email="you@gmail.com")
         result = agent.run(summarised_papers, recipient_email="user@example.com")
 
     Environment Variables Required:
-        RESEND_API_KEY : Your Resend API key.
-                         Get one free at https://resend.com
-                         → Create account → API Keys → Create Key
-                         → Set in .env locally or HF Space secrets
+        GMAIL_ADDRESS      : Your full Gmail address (e.g. yourname@gmail.com)
+        GMAIL_APP_PASSWORD : 16-character Gmail App Password (NOT your Gmail password)
 
-    Setup notes:
-        - Resend requires a verified sender domain for production use.
-        - For testing/dev, Resend provides a free sandbox domain:
-          onboarding@resend.dev (limited to your own verified email address)
-        - For production: verify your domain at resend.com/domains
+    How to get Gmail App Password:
+        1. Go to myaccount.google.com
+        2. Security → 2-Step Verification → enable it (required)
+        3. Security → 2-Step Verification → scroll to "App passwords"
+        4. App: Mail | Device: Other (name it "AI Digest") → Generate
+        5. Copy the 16-char password → add to .env / HF Secrets
     """
 
+    # Gmail SMTP server settings — these never change for Gmail
+    GMAIL_SMTP_HOST = "smtp.gmail.com"
+    GMAIL_SMTP_PORT = 587          # Port 587 = TLS (more reliable than SSL/465)
+
     # Path to our Jinja2 HTML template
-    # Using Path(__file__) ensures this works regardless of where Python is run from
     TEMPLATE_DIR  = Path(__file__).parent.parent / "templates"
     TEMPLATE_FILE = "email_template.html"
 
-    def __init__(self, sender_email: str = "onboarding@resend.dev",
-                 sender_name: str = "AI Research Digest"):
+    def __init__(self, sender_email: str = None, sender_name: str = "AI Research Digest"):
         """
-        Initialises the newsletter agent.
+        Initialises the newsletter agent and validates Gmail credentials.
 
         Args:
-            sender_email : The "From" address in the email.
-                           Must be a verified domain in your Resend account.
-                           Default uses Resend's sandbox (good for dev/testing).
-            sender_name  : Display name shown in the recipient's inbox.
-                           e.g. "AI Research Digest" appears as sender.
+            sender_email : Gmail address to send from.
+                           Falls back to GMAIL_ADDRESS env var if not provided.
+            sender_name  : Display name shown in recipient's inbox.
 
         Raises:
-            ValueError: If RESEND_API_KEY is not set in environment variables.
+            ValueError: If GMAIL_ADDRESS or GMAIL_APP_PASSWORD are not set.
         """
-        # Load and validate the Resend API key
-        self.resend_api_key = os.getenv("RESEND_API_KEY")
-        if not self.resend_api_key:
+        # Load Gmail credentials from environment variables
+        # Priority: constructor argument → environment variable
+        self.gmail_address  = sender_email or os.getenv("GMAIL_ADDRESS")
+        self.app_password   = os.getenv("GMAIL_APP_PASSWORD")
+        self.sender_name    = sender_name
+
+        # Validate both credentials are present before proceeding
+        if not self.gmail_address:
             raise ValueError(
-                "RESEND_API_KEY environment variable is not set.\n"
-                "  → Get a free key at: https://resend.com\n"
-                "  → Add to .env file: RESEND_API_KEY=re_your_key_here\n"
-                "  → Or add to HF Space secrets in Settings → Repository Secrets"
+                "Gmail address not set.\n"
+                "  → Add to .env: GMAIL_ADDRESS=yourname@gmail.com\n"
+                "  → Or HF Secrets: GMAIL_ADDRESS = yourname@gmail.com"
             )
 
-        # Set the API key on the resend SDK (it uses a module-level config)
-        resend.api_key = self.resend_api_key
+        if not self.app_password:
+            raise ValueError(
+                "Gmail App Password not set.\n"
+                "  → Setup: myaccount.google.com → Security → 2-Step Verification → App passwords\n"
+                "  → Add to .env: GMAIL_APP_PASSWORD=abcdefghijklmnop  (no spaces)\n"
+                "  → Or HF Secrets: GMAIL_APP_PASSWORD = abcdefghijklmnop"
+            )
 
-        # Compose the full "From" field: "Name <email@domain.com>"
-        self.sender = f"{sender_name} <{sender_email}>"
+        # Remove any spaces from app password (users sometimes copy with spaces)
+        self.app_password = self.app_password.replace(" ", "")
 
         # Set up Jinja2 templating environment
         # FileSystemLoader tells Jinja2 where to find our .html templates
-        # autoescape=True escapes HTML characters in variables (XSS prevention)
+        # autoescape=True prevents XSS by escaping special HTML characters
         self.jinja_env = Environment(
-            loader      = FileSystemLoader(str(self.TEMPLATE_DIR)),
-            autoescape  = select_autoescape(["html"]),
+            loader     = FileSystemLoader(str(self.TEMPLATE_DIR)),
+            autoescape = select_autoescape(["html"]),
         )
 
-        print(f"[Newsletter Agent] Initialised — sender: {self.sender}")
+        print(f"[Newsletter Agent] Initialised — sender: {self.gmail_address}")
 
     # ── Main Entry Point ──────────────────────────────────────────────────────
 
@@ -128,34 +145,29 @@ class NewsletterAgent:
         Full newsletter pipeline: render template → send email.
 
         Args:
-            summarised_papers : Output from SummariserAgent.run() — list of
-                                SummarisedPaper objects ready to be displayed.
-            recipient_email   : The email address to deliver the newsletter to.
-                                Comes from the user's input in the Gradio UI.
+            summarised_papers : Output from SummariserAgent — list of
+                                SummarisedPaper objects ready to display.
+            recipient_email   : Email address to deliver the newsletter to.
 
         Returns:
-            dict: Result containing:
-                  - "success" (bool)  : Whether the email was sent successfully
-                  - "email_id" (str)  : Resend's unique ID for the sent email
-                  - "message" (str)   : Human-readable status message
-                  - "html_preview"(str): The rendered HTML (useful for debugging)
-
-        Example:
-            result = agent.run(papers, "user@example.com")
-            if result["success"]:
-                print(f"Email sent! ID: {result['email_id']}")
+            dict: {
+                "success"     (bool) : Whether the email was sent successfully
+                "email_id"    (str)  : A generated reference ID for tracking
+                "message"     (str)  : Human-readable status message
+                "html_preview"(str)  : Rendered HTML (for Gradio preview tab)
+            }
         """
         print(f"\n[Newsletter Agent] Starting newsletter pipeline...")
         print(f"[Newsletter Agent] Recipient : {recipient_email}")
         print(f"[Newsletter Agent] Papers    : {len(summarised_papers)}")
 
-        # ── Step 1: Render the HTML template ─────────────────────────────────
+        # ── Step 1: Render HTML template ──────────────────────────────────────
         print(f"[Newsletter Agent] Step 1 — Rendering HTML template...")
         html_content = self._render_template(summarised_papers)
         print(f"[Newsletter Agent]   ✅ HTML rendered ({len(html_content):,} characters)")
 
-        # ── Step 2: Send via Resend API ───────────────────────────────────────
-        print(f"[Newsletter Agent] Step 2 — Sending email via Resend...")
+        # ── Step 2: Send via Gmail SMTP ───────────────────────────────────────
+        print(f"[Newsletter Agent] Step 2 — Sending via Gmail SMTP...")
         result = self._send_email(
             to_email     = recipient_email,
             html_content = html_content,
@@ -163,11 +175,11 @@ class NewsletterAgent:
         )
 
         if result["success"]:
-            print(f"[Newsletter Agent] ✅ Email delivered! Resend ID: {result['email_id']}")
+            print(f"[Newsletter Agent] ✅ Email delivered! Ref: {result['email_id']}")
         else:
             print(f"[Newsletter Agent] ❌ Delivery failed: {result['message']}")
 
-        # Include the rendered HTML in the result so Gradio UI can preview it
+        # Include rendered HTML so Gradio UI can show a preview
         result["html_preview"] = html_content
         return result
 
@@ -178,12 +190,12 @@ class NewsletterAgent:
         Renders the Jinja2 HTML email template with real paper data.
 
         Template variables injected (must match {{ variable }} in the HTML):
-            papers        : List of SummarisedPaper objects (iterated in template)
-            date          : Today's date e.g. "Monday, March 9 2025"
-            paper_count   : Number of papers in this edition
-            read_time     : Estimated reading time in minutes
-            time_of_day   : "morning" / "afternoon" / "evening" (greeting)
-            recipient_name: "Reader" (personalisation placeholder)
+            papers         : List of SummarisedPaper objects (looped in template)
+            date           : Today's date e.g. "Monday, March 9 2025"
+            paper_count    : Number of papers in this edition
+            read_time      : Estimated reading time in minutes
+            time_of_day    : "morning" / "afternoon" / "evening"
+            recipient_name : "Reader" (generic personalisation)
 
         Args:
             summarised_papers: List of SummarisedPaper objects from Phase 3
@@ -191,45 +203,28 @@ class NewsletterAgent:
         Returns:
             str: Fully rendered HTML string ready to be sent as email body
         """
-        # Build the template context — all variables the template can access
         now = datetime.now(timezone.utc)
 
-        # Estimate reading time: ~200 words per paper summary + header/footer
-        # Average person reads ~238 words/minute
+        # Estimate reading time — ~200 words per paper at 238 words/minute
         estimated_words    = len(summarised_papers) * 200 + 100
         estimated_read_min = max(1, round(estimated_words / 238))
 
         context = {
-            # The main data — list of SummarisedPaper objects
-            # Jinja2 template iterates over this with {% for item in papers %}
             "papers"        : summarised_papers,
-
-            # Formatted date for the email header
-            # strftime codes: %A=Monday, %B=March, %-d=9, %Y=2025
             "date"          : now.strftime("%A, %B %-d %Y"),
-
-            # Stats shown in the header badge
             "paper_count"   : len(summarised_papers),
             "read_time"     : estimated_read_min,
-
-            # Personalised greeting based on UTC hour
-            # (approximate — users are in different timezones)
             "time_of_day"   : self._get_time_of_day(now.hour),
-
-            # Recipient name — using generic "Reader" for now
-            # Future enhancement: personalise from user profile
             "recipient_name": "Reader",
         }
 
-        # Load and render the template
         template     = self.jinja_env.get_template(self.TEMPLATE_FILE)
         html_content = template.render(**context)
-
         return html_content
 
     def _get_time_of_day(self, hour: int) -> str:
         """
-        Returns a greeting word based on the hour of the day (UTC).
+        Returns a greeting word based on UTC hour.
 
         Args:
             hour: UTC hour (0-23)
@@ -244,61 +239,116 @@ class NewsletterAgent:
         else:
             return "evening"
 
-    # ── Step 2: Email Delivery ────────────────────────────────────────────────
+    # ── Step 2: Gmail SMTP Delivery ───────────────────────────────────────────
 
     def _send_email(self, to_email: str, html_content: str,
                     paper_count: int) -> dict:
         """
-        Sends the rendered HTML email via the Resend API.
+        Sends the rendered HTML email via Gmail SMTP using TLS encryption.
 
-        Resend API call structure:
-            resend.Emails.send({
-                "from"    : "Name <email@domain.com>",
-                "to"      : ["recipient@example.com"],
-                "subject" : "...",
-                "html"    : "<html>...</html>",
-            })
+        How Gmail SMTP works:
+            1. Connect to smtp.gmail.com on port 587
+            2. Start TLS encryption (starttls) — secures the connection
+            3. Login with Gmail address + App Password
+            4. Send the email as a MIME multipart message
+            5. Quit the connection cleanly
 
-        The API returns an object with an "id" field on success,
-        or raises an exception on failure.
+        We use MIMEMultipart("alternative") which allows sending both
+        a plain-text fallback AND the HTML version. Email clients that
+        can't render HTML will show the plain text instead.
 
         Args:
-            to_email     : Recipient's email address
+            to_email     : Recipient email address
             html_content : Fully rendered HTML string from _render_template()
             paper_count  : Number of papers (used in subject line)
 
         Returns:
             dict: { "success": bool, "email_id": str, "message": str }
         """
-        # Build the email subject line with today's date
+        # Build subject line with today's date
         today_str = datetime.now(timezone.utc).strftime("%b %-d")
         subject   = f"🧠 AI Research Digest — {today_str} ({paper_count} papers)"
 
         try:
-            # Send via Resend SDK
-            # "to" accepts a list — supports multiple recipients in future
-            response = resend.Emails.send({
-                "from"   : self.sender,
-                "to"     : [to_email],
-                "subject": subject,
-                "html"   : html_content,
-            })
+            # ── Build the MIME email message ──────────────────────────────────
+            # MIMEMultipart("alternative") = email with both plain text + HTML
+            # The email client picks the best version it can display
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"]    = f"{self.sender_name} <{self.gmail_address}>"
+            msg["To"]      = to_email
 
-            # Resend returns an object with an id on success
-            email_id = getattr(response, "id", None) or response.get("id", "unknown")
+            # Plain text fallback — shown if recipient's email can't render HTML
+            # Keep it simple — just direct them to check a proper email client
+            plain_text = (
+                f"AI Research Digest — {today_str}\n\n"
+                f"Your digest contains {paper_count} AI research paper summaries.\n"
+                f"Please view this email in an HTML-capable email client to see "
+                f"the full formatted newsletter.\n\n"
+                f"Powered by Mistral 7B and open-source tools."
+            )
+
+            # Attach both parts — plain text first, HTML second
+            # RFC 2046: the LAST part is preferred by email clients
+            # So HTML (attached second) will be shown when supported
+            msg.attach(MIMEText(plain_text, "plain"))
+            msg.attach(MIMEText(html_content, "html"))
+
+            # ── Connect and send via Gmail SMTP ───────────────────────────────
+            # smtplib.SMTP() opens the connection
+            # starttls() upgrades to encrypted TLS connection (required by Gmail)
+            # login() authenticates with App Password
+            # sendmail() delivers the message
+            with smtplib.SMTP(self.GMAIL_SMTP_HOST, self.GMAIL_SMTP_PORT) as server:
+                server.ehlo()           # Identify ourselves to the SMTP server
+                server.starttls()       # Upgrade to TLS encrypted connection
+                server.ehlo()           # Re-identify after TLS upgrade
+                server.login(self.gmail_address, self.app_password)
+                server.sendmail(
+                    from_addr = self.gmail_address,
+                    to_addrs  = [to_email],
+                    msg       = msg.as_string(),
+                )
+
+            # Generate a simple reference ID for tracking
+            # (Gmail SMTP doesn't return an ID like Resend does)
+            from datetime import datetime
+            email_id = f"gmail_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
             return {
                 "success" : True,
                 "email_id": email_id,
-                "message" : f"Email successfully sent to {to_email}",
+                "message" : f"Email successfully sent to {to_email} via Gmail SMTP",
             }
 
-        except resend.exceptions.ResendError as e:
-            # Resend-specific errors (invalid API key, unverified domain, etc.)
+        except smtplib.SMTPAuthenticationError:
+            # Wrong Gmail address or App Password
+            # Most common error — always check App Password setup first
             return {
                 "success" : False,
                 "email_id": None,
-                "message" : f"Resend API error: {str(e)}",
+                "message" : (
+                    "Gmail authentication failed.\n"
+                    "Check that GMAIL_ADDRESS and GMAIL_APP_PASSWORD are correct.\n"
+                    "Make sure you're using an App Password, not your regular Gmail password.\n"
+                    "Setup: myaccount.google.com → Security → 2-Step Verification → App passwords"
+                ),
+            }
+
+        except smtplib.SMTPRecipientsRefused:
+            # Invalid recipient email address
+            return {
+                "success" : False,
+                "email_id": None,
+                "message" : f"Recipient address rejected by Gmail: {to_email}",
+            }
+
+        except smtplib.SMTPException as e:
+            # Other SMTP-level errors
+            return {
+                "success" : False,
+                "email_id": None,
+                "message" : f"SMTP error: {str(e)}",
             }
 
         except Exception as e:
@@ -317,22 +367,16 @@ class NewsletterAgent:
         Saves the rendered HTML to a local file for visual preview.
         Useful during development to check the email design without sending.
 
-        Usage:
-            agent.save_preview(summarised_papers, "preview.html")
-            # Then open preview.html in your browser
-
         Args:
             summarised_papers : Papers to render into the preview
-            output_path       : Where to save the HTML file (default: current dir)
+            output_path       : Where to save the HTML file
 
         Returns:
             str: Absolute path to the saved preview file
         """
         html = self._render_template(summarised_papers)
-
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(html)
-
         abs_path = os.path.abspath(output_path)
         print(f"[Newsletter Agent] 👁️  Preview saved: {abs_path}")
         return abs_path
@@ -342,100 +386,58 @@ class NewsletterAgent:
 
 if __name__ == "__main__":
     """
-    Standalone test for the Newsletter Agent.
+    Standalone test for the Newsletter Agent with Gmail SMTP.
 
-    This test does TWO things:
-        1. Renders the HTML template with mock data → saves preview.html
-           (you can open this in your browser to check the design)
-        2. Optionally sends a real test email if RESEND_API_KEY is set
-
-    To send a real test email:
-        1. Sign up at https://resend.com (free)
-        2. Copy your API key
-        3. Add to .env: RESEND_API_KEY=re_your_key_here
-        4. Run: python agents/newsletter_agent.py
+    Requirements:
+        GMAIL_ADDRESS      = yourname@gmail.com  (in .env)
+        GMAIL_APP_PASSWORD = abcdefghijklmnop    (in .env)
+        TEST_EMAIL         = your@email.com      (in .env)
     """
     from agents.fetcher_arxiv import Paper
     from agents.summariser_agent import SummarisedPaper
 
-    # ── Create mock SummarisedPaper objects ───────────────────────────────────
     mock_papers = [
         SummarisedPaper(
             paper=Paper(
-                paper_id       = "2401.00001",
-                title          = "Scaling Reasoning in Large Language Models via Chain-of-Thought",
-                authors        = ["Alice Smith", "Bob Jones", "Carol White"],
-                abstract       = "We explore how chain-of-thought prompting improves reasoning...",
+                paper_id       = "test_001",
+                title          = "Large Language Models for Reasoning",
+                authors        = ["Alice Smith", "Bob Jones"],
+                abstract       = "We explore chain-of-thought reasoning...",
                 published_date = "2025-03-09",
-                url            = "https://arxiv.org/abs/2401.00001",
+                url            = "https://arxiv.org/abs/test_001",
                 source         = "arxiv",
                 categories     = ["cs.AI"],
             ),
-            headline       = "AI models can now 'show their working' — and it makes them dramatically smarter",
-            what_it_does   = "Researchers discovered that asking AI to explain its reasoning step-by-step, rather than just giving an answer, dramatically improves accuracy on complex problems. This works especially well for maths, logic puzzles, and multi-step decisions.",
-            why_it_matters = "This means AI assistants can become much more reliable for tasks that require careful thinking, like analysing contracts or diagnosing problems — not just answering simple questions.",
-            analogy        = "Think of it like asking a student to show their working in a maths exam — the process of writing it out forces clearer thinking and catches mistakes before the final answer.",
-            summary_raw    = "Mock summary",
-        ),
-        SummarisedPaper(
-            paper=Paper(
-                paper_id       = "hf_2401.00002",
-                title          = "Autonomous Coding Agents: From Bug Fixing to Full Feature Development",
-                authors        = ["Dan Lee", "Eva Brown"],
-                abstract       = "We present an autonomous agent that can write, test and debug code...",
-                published_date = "2025-03-09",
-                url            = "https://huggingface.co/papers/2401.00002",
-                source         = "huggingface",
-                categories     = ["cs.AI"],
-            ),
-            headline       = "AI can now write, test, and fix its own code — without any human help",
-            what_it_does   = "A new AI system was built that takes a plain-English description of a software feature and produces working, tested code entirely on its own. It can even find bugs, rewrite the broken parts, and verify the fix — all in one go.",
-            why_it_matters = "Software development costs could fall dramatically as AI takes on routine coding tasks, freeing human developers to focus on design and strategy rather than repetitive implementation work.",
-            analogy        = "Think of it like hiring a junior developer who never sleeps, never gets frustrated, and automatically re-reads the manual whenever something doesn't work.",
-            summary_raw    = "Mock summary",
-        ),
-        SummarisedPaper(
-            paper=Paper(
-                paper_id       = "2401.00003",
-                title          = "Safety Alignment in Foundation Models: A New Benchmark",
-                authors        = ["Frank Zhang", "Grace Kim", "Henry Park"],
-                abstract       = "We introduce a comprehensive benchmark for evaluating AI safety...",
-                published_date = "2025-03-08",
-                url            = "https://arxiv.org/abs/2401.00003",
-                source         = "arxiv",
-                categories     = ["cs.AI"],
-            ),
-            headline       = "Researchers build the first proper report card for measuring AI safety",
-            what_it_does   = "A team created a standardised test suite that measures how well AI systems follow safety guidelines across hundreds of real-world scenarios. It covers everything from refusing harmful requests to being honest about uncertainty.",
-            why_it_matters = "Without consistent ways to measure safety, companies can't prove their AI is trustworthy. This benchmark gives regulators, businesses, and researchers a shared language for evaluating AI risk.",
-            analogy        = "Think of it like crash-test safety ratings for cars — before these existed, there was no reliable way to compare how safe different vehicles were.",
-            summary_raw    = "Mock summary",
+            headline       = "AI models can now show their working — and it makes them smarter",
+            what_it_does   = "Researchers found that asking AI to explain its reasoning step-by-step dramatically improves accuracy on complex tasks.",
+            why_it_matters = "This means AI assistants become far more reliable for tasks requiring careful thinking.",
+            analogy        = "Think of it like asking a student to show their working in a maths exam.",
+            summary_raw    = "",
         ),
     ]
 
     print("="*60)
-    print("  NEWSLETTER AGENT — TEST RUN")
+    print("  NEWSLETTER AGENT — GMAIL SMTP TEST")
     print("="*60)
 
     try:
         agent = NewsletterAgent()
 
-        # Always save a local HTML preview
-        preview_path = agent.save_preview(mock_papers, "preview_email.html")
-        print(f"\n✅ HTML preview saved → open in browser: {preview_path}")
+        # Save preview HTML
+        agent.save_preview(mock_papers, "preview_email.html")
+        print("✅ HTML preview saved → open preview_email.html in browser")
 
-        # Optionally send a real email (requires RESEND_API_KEY in .env)
-        test_recipient = os.getenv("TEST_EMAIL")
-        if test_recipient:
-            print(f"\n📧 Sending test email to: {test_recipient}")
-            result = agent.run(mock_papers, test_recipient)
+        # Send test email if TEST_EMAIL is set
+        test_email = os.getenv("TEST_EMAIL")
+        if test_email:
+            print(f"\n📧 Sending test email to: {test_email}")
+            result = agent.run(mock_papers, test_email)
             if result["success"]:
-                print(f"✅ Email sent! ID: {result['email_id']}")
+                print(f"✅ Email sent! Ref: {result['email_id']}")
             else:
                 print(f"❌ Failed: {result['message']}")
         else:
-            print("\n💡 To test real email sending:")
-            print("   Add TEST_EMAIL=your@email.com to your .env file")
+            print("\n💡 Add TEST_EMAIL=your@email.com to .env to send a test email")
 
     except ValueError as e:
         print(f"\n⚠️  Setup required:\n{e}")
