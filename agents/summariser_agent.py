@@ -101,7 +101,7 @@ class SummariserAgent:
 
     # Max tokens for the generated summary
     # ~400 tokens ≈ 300 words — enough for a rich summary without being too long
-    MAX_NEW_TOKENS = 750  # 750 tokens = enough for all 4 sections reliably
+    MAX_NEW_TOKENS = 600  # 600 tokens = enough for all 4 sections reliably
 
     # How many times to retry if the API returns an error
     MAX_RETRIES = 3
