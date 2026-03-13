@@ -6,6 +6,8 @@ An autonomous AI pipeline that fetches the latest research papers from **arXiv**
 
 Built entirely with free, open-source tools. Deployed on **HuggingFace Spaces**.
 
+Link : [AI Research Digest](https://huggingface.co/spaces/SivaSai8143/ai-research-digest)
+
 ---
 
 ## 📌 Table of Contents
@@ -439,6 +441,8 @@ git push space main
 | **Total** | **~$1/year** |
 
 ---
+
+HuggingFace Space Link
 
 ## 📄 License
 
