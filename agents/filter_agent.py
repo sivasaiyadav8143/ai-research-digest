@@ -298,7 +298,7 @@ class FilterRankAgent:
                 continue
 
             # Check 2: Abstract must exist and meet minimum length
-            # Without a decent abstract, Mistral 7B can't generate a good summary
+            # Without a decent abstract, Mistral 7B can't generate a good summary (it would either hallucinate or produce the generic fallback text.)
             if not paper.abstract or len(paper.abstract.strip()) < MIN_ABSTRACT_LENGTH:
                 print(f"  [Filter] ✗ Removed (missing/short abstract): '{paper.title[:40]}'")
                 continue
