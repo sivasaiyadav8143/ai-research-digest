@@ -304,6 +304,8 @@ class FilterRankAgent:
                 continue
 
             # Check 3: Title shouldn't be all uppercase (scraping noise)
+            # EX: "PROCEEDINGS OF THE INTERNATIONAL CONFERENCE" are scraping noise 
+            # usually a page heading or metadata field that got picked up instead of the actual paper title.
             if paper.title == paper.title.upper() and len(paper.title) > 20:
                 print(f"  [Filter] ✗ Removed (all-caps title, likely noise): '{paper.title[:40]}'")
                 continue
