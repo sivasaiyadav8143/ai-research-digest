@@ -2,7 +2,12 @@
 
 > Stay ahead of AI research — without reading the papers.
 
+The problem?
+Finding relevant insights from trusted sources is harder than ever.
+
 An autonomous AI pipeline that fetches the latest research papers from **arXiv** and **HuggingFace Papers**, ranks them by relevance, summarises them in plain English using **Llama 3.1 8B via Groq**, and delivers a beautiful HTML newsletter to any inbox — daily or on demand.
+
+All papers come directly from trusted research sources (arXiv & HuggingFace Papers) — helping cut through the noise and misinformation that’s everywhere today.
 
 Built entirely with free, open-source tools. Deployed on **HuggingFace Spaces**.
 
